@@ -1,0 +1,45 @@
+{
+  "name": "voicesync",
+  "version": "1.0.0",
+  "description": "Terminal-based real-time voice communication system",
+  "license": "MIT",
+  "bin": {
+    "voicesync": "./bin/voicesync.js"
+  },
+  "scripts": {
+    "start": "node bin/voicesync.js",
+    "server": "node bin/voicesync.js server",
+    "test": "jest",
+    "test:coverage": "jest --coverage",
+    "test:watch": "jest --watch"
+  },
+  "dependencies": {
+    "blessed": "^0.1.81",
+    "chalk": "^4.1.2",
+    "commander": "^11.1.0",
+    "express": "^4.18.2",
+    "inquirer": "^8.2.6",
+    "nanoid": "^3.3.7",
+    "ora": "^5.4.1",
+    "simple-peer": "^9.11.1",
+    "ws": "^8.16.0"
+  },
+  "optionalDependencies": {
+    "mic": "^2.1.2",
+    "speaker": "^0.5.4",
+    "wrtc": "^0.4.7"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "keywords": [
+    "voice",
+    "cli",
+    "terminal",
+    "webrtc",
+    "voip"
+  ]
+}
