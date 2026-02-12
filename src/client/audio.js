@@ -7,6 +7,7 @@ const logger = require('../utils/logger');
 const SAMPLE_RATE = 48000;
 const CHANNELS = 1;
 const BIT_DEPTH = 16;
+const FRAMES_PER_10MS = (SAMPLE_RATE / 100) * CHANNELS; // 480
 
 /**
  * Manages microphone capture and remote peer audio playback.
@@ -36,6 +37,7 @@ class AudioManager extends EventEmitter {
 
     this._isMuted = false;
     this._isCapturing = false;
+    this._pcmBuffer = Buffer.alloc(0);
 
     // Optional native module references
     this._wrtc = null;
@@ -52,9 +54,9 @@ class AudioManager extends EventEmitter {
    */
   _loadNativeModules() {
     try {
-      this._wrtc = require('wrtc');
+      this._wrtc = require('@roamhq/wrtc');
     } catch {
-      logger.warn('wrtc not available — WebRTC audio disabled. Run: npm install wrtc');
+      logger.warn('wrtc not available — WebRTC audio disabled. Run: npm install @roamhq/wrtc');
     }
     try {
       this._Mic = require('mic');
@@ -129,22 +131,36 @@ class AudioManager extends EventEmitter {
   _onMicData(chunk) {
     if (!this._audioSource) return;
 
-    const samples = new Int16Array(chunk.buffer, chunk.byteOffset, chunk.byteLength / 2);
-    const numberOfFrames = Math.floor(samples.length / CHANNELS);
+    // RTCAudioSource.onData() requires exactly 480 frames (10ms at 48kHz).
+    // The mic sends larger chunks, so we buffer and drain in 480-frame slices.
+    this._pcmBuffer = Buffer.concat([this._pcmBuffer, chunk]);
 
-    if (!this._isMuted) {
-      this._audioSource.onData({
-        samples,
-        sampleRate: SAMPLE_RATE,
-        bitsPerSample: BIT_DEPTH,
-        channelCount: CHANNELS,
-        numberOfFrames,
-      });
+    const bytesPerFrame = (BIT_DEPTH / 8) * CHANNELS; // 2
+    const bytesNeeded = FRAMES_PER_10MS * bytesPerFrame; // 960
+
+    while (this._pcmBuffer.length >= bytesNeeded) {
+      const slice = this._pcmBuffer.subarray(0, bytesNeeded);
+      this._pcmBuffer = this._pcmBuffer.subarray(bytesNeeded);
+
+      // RTCAudioSource validates the underlying ArrayBuffer byteLength, so we
+      // must copy into a standalone buffer (subarray shares the original).
+      const samples = new Int16Array(FRAMES_PER_10MS);
+      samples.set(new Int16Array(slice.buffer, slice.byteOffset, FRAMES_PER_10MS));
+
+      if (!this._isMuted) {
+        this._audioSource.onData({
+          samples,
+          sampleRate: SAMPLE_RATE,
+          bitsPerSample: BIT_DEPTH,
+          channelCount: CHANNELS,
+          numberOfFrames: FRAMES_PER_10MS,
+        });
+      }
+
+      // Float32 normalisation for waveform — always, even when muted
+      const float32 = Float32Array.from(samples, (s) => s / 32768.0);
+      this.emit('samples', float32);
     }
-
-    // Float32 normalisation for waveform — always, even when muted
-    const float32 = Float32Array.from(samples, (s) => s / 32768.0);
-    this.emit('samples', float32);
   }
 
   /**
@@ -160,6 +176,7 @@ class AudioManager extends EventEmitter {
     this._micStream = null;
     this._localTrack = null;
     this._audioSource = null;
+    this._pcmBuffer = Buffer.alloc(0);
     this._isCapturing = false;
     logger.info('Microphone capture stopped');
   }

@@ -36,7 +36,7 @@ class PeerManager extends EventEmitter {
   _loadModules() {
     try {
       this._SimplePeer = require('simple-peer');
-      this._wrtc = require('wrtc');
+      this._wrtc = require('@roamhq/wrtc');
     } catch (err) {
       logger.warn(`WebRTC modules unavailable: ${err.message}`);
     }

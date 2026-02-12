@@ -21,13 +21,13 @@
     "inquirer": "^8.2.6",
     "nanoid": "^3.3.7",
     "ora": "^5.4.1",
+    "@roamhq/wrtc": "^0.9.1",
     "simple-peer": "^9.11.1",
     "ws": "^8.16.0"
   },
   "optionalDependencies": {
     "mic": "^2.1.2",
-    "speaker": "^0.5.4",
-    "wrtc": "^0.4.7"
+    "speaker": "^0.5.4"
   },
   "devDependencies": {
     "jest": "^29.7.0"
