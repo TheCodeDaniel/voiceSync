@@ -1,6 +1,7 @@
 'use strict';
 
 const chalk = require('chalk');
+const notifier = require('node-notifier');
 const { createDashboard } = require('../ui/dashboard');
 const logger = require('../utils/logger');
 
@@ -32,10 +33,14 @@ async function runCallUI(session, roomKey, username) {
   session.on('participant-update', (participants) => dashboard.updateParticipants(participants));
 
   session.on('invite', ({ fromUsername }) => {
-    // User is already in a call; just surface the notification
     dashboard.showMessage(
       chalk.yellow(`Invite from ${fromUsername} (you are already in a call)`),
     );
+    notifier.notify({
+      title: 'VoiceSync',
+      message: `${fromUsername} invited you to a call`,
+      sound: true,
+    });
   });
 
   session.on('invite-sent', ({ toUsername }) => {
