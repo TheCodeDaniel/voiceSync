@@ -1,7 +1,6 @@
 'use strict';
 
 const chalk = require('chalk');
-const notifier = require('node-notifier');
 const { createDashboard } = require('../ui/dashboard');
 const logger = require('../utils/logger');
 
@@ -12,9 +11,8 @@ const logger = require('../utils/logger');
  * behaviour is always identical regardless of how the call was initiated.
  *
  * Keyboard shortcuts handled here:
- *   [I]       — open invite prompt
  *   [M]       — toggle microphone mute
- *   [Q / Esc] — leave the call and exit
+ *   [Q]       — leave the call and exit
  *   [?]       — show shortcut reminder in status bar
  *   [Ctrl+C]  — emergency exit
  *
@@ -32,24 +30,7 @@ async function runCallUI(session, roomKey, username) {
 
   session.on('participant-update', (participants) => dashboard.updateParticipants(participants));
 
-  session.on('invite', ({ fromUsername }) => {
-    dashboard.showMessage(
-      chalk.yellow(`Invite from ${fromUsername} (you are already in a call)`),
-    );
-    notifier.notify({
-      title: 'VoiceSync',
-      message: `${fromUsername} invited you to a call`,
-      sound: true,
-    });
-  });
-
-  session.on('invite-sent', ({ toUsername }) => {
-    dashboard.showMessage(chalk.green(`Invite sent to ${toUsername}`));
-  });
-
-  session.on('invite-error', (message) => {
-    dashboard.showMessage(chalk.red(`Invite error: ${message}`));
-  });
+  session.on('latency', (ms) => dashboard.updateLatency(ms));
 
   session.on('error', (err) => {
     logger.error(err.message);
@@ -68,23 +49,17 @@ async function runCallUI(session, roomKey, username) {
 
   const { screen } = dashboard;
 
-  screen.key(['i', 'I'], () => {
-    dashboard.promptInvite((targetUsername) => {
-      if (!targetUsername) return;
-      session.inviteUser(targetUsername).catch((err) => {
-        dashboard.showMessage(chalk.red(`Invite failed: ${err.message}`));
-      });
-    });
-  });
-
   screen.key(['m', 'M'], () => {
+    if (dashboard.isPromptActive()) return;
     const nowMuted = !session.isMuted;
     session.setMuted(nowMuted);
+    dashboard.updateMuteState(nowMuted);
     dashboard.showMessage(nowMuted ? 'Microphone muted' : 'Microphone unmuted');
   });
 
-  screen.key(['q', 'Q', 'escape'], async () => {
-    dashboard.setStatus('Leaving call…');
+  screen.key(['q', 'Q'], async () => {
+    if (dashboard.isPromptActive()) return;
+    dashboard.setStatus('Leaving call...');
     await session.leave();
     dashboard.destroy();
     console.log(chalk.yellow('\nYou left the call. Goodbye!\n'));
@@ -98,7 +73,8 @@ async function runCallUI(session, roomKey, username) {
   });
 
   screen.key(['?'], () => {
-    dashboard.showMessage('[I] Invite  [M] Mute/Unmute  [Q] Leave  [?] This help');
+    if (dashboard.isPromptActive()) return;
+    dashboard.showMessage('[M] Mute/Unmute  [Q] Leave Call  [?] This help');
   });
 
   // ── Wait for the call to end ───────────────────────────────────────────────

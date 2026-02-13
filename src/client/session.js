@@ -131,6 +131,8 @@ class Session extends EventEmitter {
 
     sig.on('error', (err) => this.emit('error', err));
 
+    sig.on('latency', (ms) => this.emit('latency', ms));
+
     sig.on('close', () => {
       if (this._roomKey) {
         const err = new Error('Signaling connection lost');

@@ -6,6 +6,7 @@ const { SignalingError } = require('../utils/errors');
 const logger = require('../utils/logger');
 
 const PING_INTERVAL_MS = 25_000;
+const LATENCY_INTERVAL_MS = 3_000;
 const RECONNECT_DELAY_MS = 3_000;
 const MAX_RECONNECT_ATTEMPTS = 5;
 
@@ -33,6 +34,8 @@ class SignalingClient extends EventEmitter {
     this._WS = wsFactory || WebSocket;  // injectable for unit testing
     this._ws = null;
     this._pingTimer = null;
+    this._latencyTimer = null;
+    this._latencyMs = -1;
     this._reconnectAttempts = 0;
     this._intentionalClose = false;
   }
@@ -99,11 +102,30 @@ class SignalingClient extends EventEmitter {
     this._pingTimer = setInterval(() => {
       if (this._ws?.readyState === (this._WS.OPEN ?? WebSocket.OPEN)) this._ws.ping();
     }, PING_INTERVAL_MS);
+
+    // Latency measurement via WS ping/pong round-trip
+    let pingSentAt = 0;
+    if (this._ws?.on) {
+      this._ws.on('pong', () => {
+        if (pingSentAt > 0) {
+          this._latencyMs = Date.now() - pingSentAt;
+          this.emit('latency', this._latencyMs);
+        }
+      });
+    }
+    this._latencyTimer = setInterval(() => {
+      if (this._ws?.readyState === (this._WS.OPEN ?? WebSocket.OPEN)) {
+        pingSentAt = Date.now();
+        this._ws.ping();
+      }
+    }, LATENCY_INTERVAL_MS);
   }
 
   _stopPing() {
     clearInterval(this._pingTimer);
+    clearInterval(this._latencyTimer);
     this._pingTimer = null;
+    this._latencyTimer = null;
   }
 
   // ── Reconnection ──────────────────────────────────────────────────────────
@@ -173,6 +195,9 @@ class SignalingClient extends EventEmitter {
     this._ws?.close();
     this._ws = null;
   }
+
+  /** @returns {number} Latest round-trip latency in ms, or -1 if unknown */
+  get latencyMs() { return this._latencyMs; }
 
   /** @returns {boolean} */
   get isConnected() {
