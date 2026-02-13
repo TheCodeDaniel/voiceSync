@@ -205,22 +205,29 @@ class AudioManager extends EventEmitter {
 
     const { nonstandard: { RTCAudioSink } } = this._wrtc;
     const sink = new RTCAudioSink(track);
-    const speaker = new this._Speaker({
-      channels: CHANNELS,
-      bitDepth: BIT_DEPTH,
-      sampleRate: SAMPLE_RATE,
-    });
+
+    // Create the Speaker lazily on first audio data to avoid Core Audio
+    // buffer underflow warnings while waiting for WebRTC packets.
+    let speaker = null;
+    const SpeakerCtor = this._Speaker;
 
     sink.addEventListener('data', ({ samples }) => {
+      if (!speaker) {
+        speaker = new SpeakerCtor({
+          channels: CHANNELS,
+          bitDepth: BIT_DEPTH,
+          sampleRate: SAMPLE_RATE,
+        });
+        this._speakers.set(peerId, speaker);
+      }
       if (speaker.writable) {
         speaker.write(Buffer.from(samples.buffer, samples.byteOffset, samples.byteLength));
       }
     });
 
-    sink.addEventListener('close', () => speaker.end());
+    sink.addEventListener('close', () => speaker?.end());
 
     this._sinks.set(peerId, sink);
-    this._speakers.set(peerId, speaker);
     logger.debug(`Audio playback started for peer ${peerId}`);
   }
 

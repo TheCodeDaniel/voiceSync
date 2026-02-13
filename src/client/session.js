@@ -52,6 +52,12 @@ class Session extends EventEmitter {
     this._peers = new PeerManager();
     this._audio = new AudioManager();
 
+    // Safety net: prevent Node.js from crashing on unhandled 'error' events
+    // (e.g. when errors fire before the dashboard registers its own listener).
+    this.on('error', (err) => {
+      logger.error(`Session error: ${err.message}`);
+    });
+
     this._bindSignalingEvents();
     this._bindPeerEvents();
     this._bindAudioEvents();
@@ -68,18 +74,14 @@ class Session extends EventEmitter {
       logger.debug(`Logged in as "${this._username}" (peerId: ${peerId})`);
     });
 
-    sig.on('login-error', ({ message }) => {
-      this.emit('error', new Error(`Login failed: ${message}`));
-    });
+    // login-error is handled by _waitFor in connect()
 
     sig.on('room-created', ({ roomKey }) => {
       this._roomKey = roomKey;
       this._upsertParticipant(this._peerId, this._username, true);
     });
 
-    sig.on('create-error', ({ message }) => {
-      this.emit('error', new Error(`Create room failed: ${message}`));
-    });
+    // create-error is handled by _waitFor in createRoom()
 
     sig.on('room-joined', ({ roomKey, peers }) => {
       this._roomKey = roomKey;
@@ -92,9 +94,7 @@ class Session extends EventEmitter {
       }
     });
 
-    sig.on('join-error', ({ message }) => {
-      this.emit('error', new Error(`Join room failed: ${message}`));
-    });
+    // join-error is handled by _waitFor in joinRoom()
 
     sig.on('peer-joined', ({ peerId, username }) => {
       this._upsertParticipant(peerId, username, false);
