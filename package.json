@@ -27,9 +27,6 @@
     "simple-peer": "^9.11.1",
     "ws": "^8.16.0"
   },
-  "optionalDependencies": {
-    "mic": "^2.1.2"
-  },
   "devDependencies": {
     "jest": "^29.7.0"
   },

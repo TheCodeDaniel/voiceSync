@@ -12,12 +12,8 @@ const FRAMES_PER_10MS = (SAMPLE_RATE / 100) * CHANNELS; // 480
 /**
  * Manages microphone capture and remote peer audio playback.
  *
- * Native modules (`wrtc`, `mic`) are loaded lazily so that the rest of the
- * application stays functional even when they are unavailable (e.g. in CI
- * or environments where native bindings cannot be compiled).
- *
- * Audio output uses `audify` (RtAudio) which ships prebuilt binaries for
- * Windows, macOS and Linux — no native compilation required.
+ * All audio I/O goes through `audify` (RtAudio) which ships prebuilt binaries
+ * for Windows, macOS and Linux — no native compilation or external tools needed.
  *
  * Events emitted:
  *   'samples' (Float32Array) — normalised PCM chunks from the local mic,
@@ -28,54 +24,47 @@ class AudioManager extends EventEmitter {
   constructor() {
     super();
 
-    this._mic = null;
-    this._micStream = null;
+    this._mic = null;          // AudifyMic instance
     this._audioSource = null;  // wrtc RTCAudioSource
     this._localTrack = null;   // MediaStreamTrack to add to peer connections
 
     /** @type {Map<string, object>} peerId → RTCAudioSink */
     this._sinks = new Map();
-    /** @type {Map<string, object>} peerId → Speaker */
+    /** @type {Map<string, object>} peerId → AudifySpeaker */
     this._speakers = new Map();
 
     this._isMuted = false;
     this._isCapturing = false;
     this._pcmBuffer = Buffer.alloc(0);
 
-    // Optional native module references
+    // Module references
     this._wrtc = null;
-    this._Mic = null;
-    this._AudifySpeaker = null;
+    this._audifyAudio = null;
 
-    this._loadNativeModules();
+    this._loadModules();
   }
 
   /**
-   * Attempts to require optional native modules.
+   * Loads wrtc and audify modules.
    * Emits warnings rather than throwing so the app degrades gracefully.
    * @private
    */
-  _loadNativeModules() {
+  _loadModules() {
     try {
       this._wrtc = require('@roamhq/wrtc');
     } catch {
       logger.warn('wrtc not available — WebRTC audio disabled. Run: npm install @roamhq/wrtc');
     }
     try {
-      this._Mic = require('mic');
+      this._audifyAudio = require('./audifyAudio');
     } catch {
-      logger.warn('mic not available — microphone capture disabled. Run: npm install mic');
-    }
-    try {
-      this._AudifySpeaker = require('./audifySpeaker');
-    } catch {
-      logger.warn('audify not available — audio playback disabled. Run: npm install audify');
+      logger.warn('audify not available — audio I/O disabled. Run: npm install audify');
     }
   }
 
-  /** @returns {boolean} true when both wrtc and mic are available */
+  /** @returns {boolean} true when both wrtc and audify are available */
   get isCaptureAvailable() {
-    return Boolean(this._wrtc && this._Mic);
+    return Boolean(this._wrtc && this._audifyAudio);
   }
 
   /**
@@ -88,7 +77,7 @@ class AudioManager extends EventEmitter {
    */
   startCapture() {
     if (this._isCapturing) return;
-    if (!this._wrtc || !this._Mic) {
+    if (!this._wrtc || !this._audifyAudio) {
       logger.warn('Audio capture unavailable — running in silent mode');
       return;
     }
@@ -98,21 +87,18 @@ class AudioManager extends EventEmitter {
     this._localTrack = this._audioSource.createTrack();
 
     try {
-      this._mic = this._Mic({
-        rate: String(SAMPLE_RATE),
-        channels: String(CHANNELS),
-        bitwidth: String(BIT_DEPTH),
-        encoding: 'signed-integer',
-        endian: 'little',
+      const { AudifyMic } = this._audifyAudio;
+      this._mic = new AudifyMic({
+        channels: CHANNELS,
+        sampleRate: SAMPLE_RATE,
+        frameSize: FRAMES_PER_10MS,
       });
     } catch (err) {
       throw new AudioError(`Failed to open microphone: ${err.message}`, 'MIC_OPEN_FAILED');
     }
 
-    this._micStream = this._mic.getAudioStream();
-
-    this._micStream.on('data', (chunk) => this._onMicData(chunk));
-    this._micStream.on('error', (err) => {
+    this._mic.on('data', (chunk) => this._onMicData(chunk));
+    this._mic.on('error', (err) => {
       const audioErr = new AudioError(err.message, 'MIC_STREAM_ERROR');
       logger.error(`Mic stream error: ${err.message}`);
       this.emit('error', audioErr);
@@ -173,10 +159,8 @@ class AudioManager extends EventEmitter {
   stopCapture() {
     if (!this._isCapturing) return;
     this._mic?.stop();
-    this._micStream?.destroy();
     this._localTrack?.stop();
     this._mic = null;
-    this._micStream = null;
     this._localTrack = null;
     this._audioSource = null;
     this._pcmBuffer = Buffer.alloc(0);
@@ -195,13 +179,13 @@ class AudioManager extends EventEmitter {
   }
 
   /**
-   * Wires up an RTCAudioSink + Speaker for incoming audio from a remote peer.
+   * Wires up an RTCAudioSink + AudifySpeaker for incoming audio from a remote peer.
    *
    * @param {string}           peerId
    * @param {MediaStreamTrack} track - The remote audio track
    */
   addPeerAudio(peerId, track) {
-    if (!this._wrtc || !this._AudifySpeaker) {
+    if (!this._wrtc || !this._audifyAudio) {
       logger.warn(`Cannot play audio for peer ${peerId} — audio output unavailable`);
       return;
     }
@@ -212,7 +196,7 @@ class AudioManager extends EventEmitter {
     // Create the speaker lazily on first audio data to avoid buffer
     // underflow warnings while waiting for WebRTC packets to arrive.
     let speaker = null;
-    const AudifySpeaker = this._AudifySpeaker;
+    const { AudifySpeaker } = this._audifyAudio;
 
     sink.addEventListener('data', ({ samples }) => {
       if (!speaker) {
