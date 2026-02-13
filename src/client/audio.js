@@ -12,9 +12,12 @@ const FRAMES_PER_10MS = (SAMPLE_RATE / 100) * CHANNELS; // 480
 /**
  * Manages microphone capture and remote peer audio playback.
  *
- * Native modules (`wrtc`, `mic`, `speaker`) are loaded lazily so that the
- * rest of the application stays functional even when they are unavailable
- * (e.g. in CI or environments where native bindings cannot be compiled).
+ * Native modules (`wrtc`, `mic`) are loaded lazily so that the rest of the
+ * application stays functional even when they are unavailable (e.g. in CI
+ * or environments where native bindings cannot be compiled).
+ *
+ * Audio output uses `audify` (RtAudio) which ships prebuilt binaries for
+ * Windows, macOS and Linux — no native compilation required.
  *
  * Events emitted:
  *   'samples' (Float32Array) — normalised PCM chunks from the local mic,
@@ -42,7 +45,7 @@ class AudioManager extends EventEmitter {
     // Optional native module references
     this._wrtc = null;
     this._Mic = null;
-    this._Speaker = null;
+    this._AudifySpeaker = null;
 
     this._loadNativeModules();
   }
@@ -64,9 +67,9 @@ class AudioManager extends EventEmitter {
       logger.warn('mic not available — microphone capture disabled. Run: npm install mic');
     }
     try {
-      this._Speaker = require('speaker');
+      this._AudifySpeaker = require('./audifySpeaker');
     } catch {
-      logger.warn('speaker not available — audio playback disabled. Run: npm install speaker');
+      logger.warn('audify not available — audio playback disabled. Run: npm install audify');
     }
   }
 
@@ -198,24 +201,23 @@ class AudioManager extends EventEmitter {
    * @param {MediaStreamTrack} track - The remote audio track
    */
   addPeerAudio(peerId, track) {
-    if (!this._wrtc || !this._Speaker) {
-      logger.warn(`Cannot play audio for peer ${peerId} — speaker unavailable`);
+    if (!this._wrtc || !this._AudifySpeaker) {
+      logger.warn(`Cannot play audio for peer ${peerId} — audio output unavailable`);
       return;
     }
 
     const { nonstandard: { RTCAudioSink } } = this._wrtc;
     const sink = new RTCAudioSink(track);
 
-    // Create the Speaker lazily on first audio data to avoid Core Audio
-    // buffer underflow warnings while waiting for WebRTC packets.
+    // Create the speaker lazily on first audio data to avoid buffer
+    // underflow warnings while waiting for WebRTC packets to arrive.
     let speaker = null;
-    const SpeakerCtor = this._Speaker;
+    const AudifySpeaker = this._AudifySpeaker;
 
     sink.addEventListener('data', ({ samples }) => {
       if (!speaker) {
-        speaker = new SpeakerCtor({
+        speaker = new AudifySpeaker({
           channels: CHANNELS,
-          bitDepth: BIT_DEPTH,
           sampleRate: SAMPLE_RATE,
         });
         this._speakers.set(peerId, speaker);
