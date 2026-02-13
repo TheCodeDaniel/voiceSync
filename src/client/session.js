@@ -133,7 +133,9 @@ class Session extends EventEmitter {
 
     sig.on('close', () => {
       if (this._roomKey) {
-        this.emit('error', new Error('Signaling connection lost unexpectedly'));
+        const err = new Error('Signaling connection lost');
+        err.code = 'CONN_LOST';
+        this.emit('error', err);
       }
     });
   }
@@ -253,19 +255,7 @@ class Session extends EventEmitter {
    * @returns {Promise<void>}
    */
   inviteUser(toUsername) {
-    return new Promise((resolve, reject) => {
-      const onSent = () => {
-        this._signaling.removeListener('invite-error', onError);
-        resolve();
-      };
-      const onError = (message) => {
-        this._signaling.removeListener('invite-sent', onSent);
-        reject(new Error(message));
-      };
-      this._signaling.once('invite-sent', onSent);
-      this._signaling.once('invite-error', onError);
-      this._signaling.invite(toUsername);
-    });
+    return this._waitFor('invite-sent', 'invite-error', () => this._signaling.invite(toUsername));
   }
 
   /**
@@ -289,10 +279,14 @@ class Session extends EventEmitter {
    * @returns {Promise<void>}
    */
   async leave() {
-    if (this._roomKey) this._signaling.leaveRoom();
-    // Allow the leave-room message to be processed before closing the socket
-    await new Promise((r) => setTimeout(r, 250));
-    this._signaling.disconnect();
+    try {
+      if (this._roomKey) this._signaling.leaveRoom();
+      // Allow the leave-room message to be processed before closing the socket
+      await new Promise((r) => setTimeout(r, 250));
+      this._signaling.disconnect();
+    } catch (err) {
+      logger.warn(`Error during leave: ${err.message}`);
+    }
     this._cleanupCall();
   }
 
@@ -317,16 +311,30 @@ class Session extends EventEmitter {
    * @returns {Promise<Object>}
    * @private
    */
-  _waitFor(successEvent, errorEvent, action) {
+  _waitFor(successEvent, errorEvent, action, timeoutMs = 10_000) {
     return new Promise((resolve, reject) => {
-      const onSuccess = (msg) => {
+      let timer;
+
+      const cleanup = () => {
+        clearTimeout(timer);
+        this._signaling.removeListener(successEvent, onSuccess);
         this._signaling.removeListener(errorEvent, onError);
+      };
+
+      const onSuccess = (msg) => {
+        cleanup();
         resolve(msg);
       };
       const onError = (msg) => {
-        this._signaling.removeListener(successEvent, onSuccess);
+        cleanup();
         reject(new Error(typeof msg === 'string' ? msg : msg.message));
       };
+
+      timer = setTimeout(() => {
+        cleanup();
+        reject(new Error(`Server did not respond in time (waiting for ${successEvent})`));
+      }, timeoutMs);
+
       this._signaling.once(successEvent, onSuccess);
       this._signaling.once(errorEvent, onError);
       action();

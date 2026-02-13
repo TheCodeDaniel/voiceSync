@@ -47,8 +47,11 @@ class AudifyMic extends EventEmitter {
       this._frameSize,
       'VoiceSync-Mic',
       (pcm) => {
-        // pcm is a Buffer of signed 16-bit PCM samples
-        this.emit('data', Buffer.from(pcm));
+        try {
+          this.emit('data', Buffer.from(pcm));
+        } catch (err) {
+          this.emit('error', err);
+        }
       },
     );
     this._rtAudio.start();

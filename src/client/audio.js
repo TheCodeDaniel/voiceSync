@@ -9,6 +9,16 @@ const CHANNELS = 1;
 const BIT_DEPTH = 16;
 const FRAMES_PER_10MS = (SAMPLE_RATE / 100) * CHANNELS; // 480
 
+// Noise gate: mic samples below this RMS are replaced with silence.
+// Prevents the mic from picking up speaker output (acoustic echo).
+const NOISE_GATE_THRESHOLD = 0.015;
+// How many consecutive quiet frames before the gate closes (prevents choppy speech)
+const NOISE_GATE_HOLD_FRAMES = 15; // ~150ms at 10ms/frame
+
+// Jitter buffer: collect this many frames before starting playback.
+// Smooths out network jitter at the cost of a small initial delay.
+const JITTER_BUFFER_FRAMES = 5; // ~50ms
+
 /**
  * Manages microphone capture and remote peer audio playback.
  *
@@ -36,6 +46,8 @@ class AudioManager extends EventEmitter {
     this._isMuted = false;
     this._isCapturing = false;
     this._pcmBuffer = Buffer.alloc(0);
+    this._noiseGateOpen = false;
+    this._noiseGateHoldCount = 0;
 
     // Module references
     this._wrtc = null;
@@ -93,18 +105,18 @@ class AudioManager extends EventEmitter {
         sampleRate: SAMPLE_RATE,
         frameSize: FRAMES_PER_10MS,
       });
+
+      this._mic.on('data', (chunk) => this._onMicData(chunk));
+      this._mic.on('error', (err) => {
+        const audioErr = new AudioError(err.message, 'MIC_STREAM_ERROR');
+        logger.error(`Mic stream error: ${err.message}`);
+        this.emit('error', audioErr);
+      });
+
+      this._mic.start();
     } catch (err) {
       throw new AudioError(`Failed to open microphone: ${err.message}`, 'MIC_OPEN_FAILED');
     }
-
-    this._mic.on('data', (chunk) => this._onMicData(chunk));
-    this._mic.on('error', (err) => {
-      const audioErr = new AudioError(err.message, 'MIC_STREAM_ERROR');
-      logger.error(`Mic stream error: ${err.message}`);
-      this.emit('error', audioErr);
-    });
-
-    this._mic.start();
     this._isCapturing = true;
     logger.info('Microphone capture started');
   }
@@ -136,7 +148,21 @@ class AudioManager extends EventEmitter {
       const samples = new Int16Array(FRAMES_PER_10MS);
       samples.set(new Int16Array(slice.buffer, slice.byteOffset, FRAMES_PER_10MS));
 
-      if (!this._isMuted) {
+      // Float32 normalisation for waveform — always, even when muted
+      const float32 = Float32Array.from(samples, (s) => s / 32768.0);
+
+      // Noise gate: suppress mic when the level is low enough to be echo/ambient noise
+      const rms = Math.sqrt(float32.reduce((sum, x) => sum + x * x, 0) / float32.length);
+      if (rms > NOISE_GATE_THRESHOLD) {
+        this._noiseGateOpen = true;
+        this._noiseGateHoldCount = NOISE_GATE_HOLD_FRAMES;
+      } else if (this._noiseGateHoldCount > 0) {
+        this._noiseGateHoldCount--;
+      } else {
+        this._noiseGateOpen = false;
+      }
+
+      if (!this._isMuted && this._noiseGateOpen) {
         this._audioSource.onData({
           samples,
           sampleRate: SAMPLE_RATE,
@@ -144,10 +170,17 @@ class AudioManager extends EventEmitter {
           channelCount: CHANNELS,
           numberOfFrames: FRAMES_PER_10MS,
         });
+      } else if (!this._isMuted) {
+        // Gate closed — send silence to keep the stream alive
+        this._audioSource.onData({
+          samples: new Int16Array(FRAMES_PER_10MS),
+          sampleRate: SAMPLE_RATE,
+          bitsPerSample: BIT_DEPTH,
+          channelCount: CHANNELS,
+          numberOfFrames: FRAMES_PER_10MS,
+        });
       }
 
-      // Float32 normalisation for waveform — always, even when muted
-      const float32 = Float32Array.from(samples, (s) => s / 32768.0);
       this.emit('samples', float32);
     }
   }
@@ -193,21 +226,33 @@ class AudioManager extends EventEmitter {
     const { nonstandard: { RTCAudioSink } } = this._wrtc;
     const sink = new RTCAudioSink(track);
 
-    // Create the speaker lazily on first audio data to avoid buffer
-    // underflow warnings while waiting for WebRTC packets to arrive.
+    // Jitter buffer + lazy speaker creation.
+    // Collect a few frames before starting playback to absorb network jitter.
     let speaker = null;
     const { AudifySpeaker } = this._audifyAudio;
+    const jitterQueue = [];
+    let jitterReady = false;
 
     sink.addEventListener('data', ({ samples }) => {
-      if (!speaker) {
-        speaker = new AudifySpeaker({
-          channels: CHANNELS,
-          sampleRate: SAMPLE_RATE,
-        });
-        this._speakers.set(peerId, speaker);
+      const buf = Buffer.from(samples.buffer, samples.byteOffset, samples.byteLength);
+
+      if (!jitterReady) {
+        jitterQueue.push(buf);
+        if (jitterQueue.length >= JITTER_BUFFER_FRAMES) {
+          // Flush the jitter buffer and start playing
+          speaker = new AudifySpeaker({ channels: CHANNELS, sampleRate: SAMPLE_RATE });
+          this._speakers.set(peerId, speaker);
+          jitterReady = true;
+          for (const queued of jitterQueue) {
+            if (speaker.writable) speaker.write(queued);
+          }
+          jitterQueue.length = 0;
+        }
+        return;
       }
-      if (speaker.writable) {
-        speaker.write(Buffer.from(samples.buffer, samples.byteOffset, samples.byteLength));
+
+      if (speaker && speaker.writable) {
+        speaker.write(buf);
       }
     });
 

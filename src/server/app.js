@@ -27,6 +27,8 @@ function createServer() {
   // ── WebSocket layer ───────────────────────────────────────────────────────
   const wss = new WebSocketServer({ server: httpServer });
 
+  wss.on('error', (err) => logger.error(`WebSocket server error: ${err.message}`));
+
   wss.on('connection', (ws) => {
     // Assign every connection a server-side UUID as its peer ID.
     // This is sent to the client immediately so it knows its own identity.

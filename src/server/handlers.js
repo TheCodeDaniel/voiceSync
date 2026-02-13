@@ -165,7 +165,12 @@ function handleMessage(ws, peerId, rawMessage) {
 
   const handler = MESSAGE_HANDLERS[msg.type];
   if (handler) {
-    handler(ws, peerId, msg);
+    try {
+      handler(ws, peerId, msg);
+    } catch (err) {
+      logger.error(`Handler error for "${msg.type}" from ${peerId}: ${err.message}`);
+      send(ws, { type: 'error', message: 'Internal server error' });
+    }
   } else {
     logger.warn(`Unknown message type "${msg.type}" from ${peerId}`);
   }

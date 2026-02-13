@@ -15,7 +15,7 @@ const logger = require('../utils/logger');
  */
 function runServer({ port, host }) {
   const spinner = ora('Starting VoiceSync signaling server…').start();
-  const { httpServer } = createServer();
+  const { httpServer, wss } = createServer();
 
   httpServer.listen(port, host, () => {
     spinner.succeed(chalk.green(`Signaling server listening on ws://${host}:${port}`));
@@ -30,9 +30,13 @@ function runServer({ port, host }) {
 
   process.on('SIGINT', () => {
     console.log(chalk.yellow('\nShutting down server…'));
-    httpServer.close(() => {
-      console.log(chalk.green('Server stopped.'));
-      process.exit(0);
+    // Close all active WebSocket connections before shutting down
+    for (const client of wss.clients) client.terminate();
+    wss.close(() => {
+      httpServer.close(() => {
+        console.log(chalk.green('Server stopped.'));
+        process.exit(0);
+      });
     });
   });
 }

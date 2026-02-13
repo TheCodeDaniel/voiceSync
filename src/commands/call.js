@@ -51,11 +51,11 @@ async function runCallUI(session, roomKey, username) {
     dashboard.showMessage(chalk.red(`Invite error: ${message}`));
   });
 
-  session.on('error', async (err) => {
+  session.on('error', (err) => {
     logger.error(err.message);
 
     // Connection lost is fatal — exit gracefully instead of sitting in a dead UI
-    if (err.message.includes('connection lost') || err.message.includes('CONN_LOST')) {
+    if (err.code === 'CONN_LOST' || err.code === 'WS_ERROR') {
       dashboard.destroy();
       console.error(chalk.red(`\nDisconnected: ${err.message}\n`));
       process.exit(1);
