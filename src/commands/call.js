@@ -1,6 +1,7 @@
 'use strict';
 
 const chalk = require('chalk');
+const notifier = require('node-notifier');
 const { createDashboard } = require('../ui/dashboard');
 const logger = require('../utils/logger');
 
@@ -34,6 +35,13 @@ async function runCallUI(session, roomKey, username) {
 
   session.on('chat', ({ fromUsername, text }) => {
     dashboard.addChatMessage(fromUsername, text, false);
+
+    // OS push notification so the user sees chat even when terminal is in the background
+    notifier.notify({
+      title: `VoiceSync - ${fromUsername}`,
+      message: text.length > 100 ? text.slice(0, 100) + '...' : text,
+      sound: true,
+    });
   });
 
   session.on('error', (err) => {

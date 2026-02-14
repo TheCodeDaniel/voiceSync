@@ -123,8 +123,10 @@ function handleChat(ws, peerId, { text }) {
   const room = rooms.getRoom(user.roomKey);
   if (!room) return;
 
-  const payload = { type: 'chat', fromUsername: user.username, text: text.trim().slice(0, 500) };
+  const trimmed = text.trim().slice(0, 500);
+  const payload = { type: 'chat', fromUsername: user.username, text: trimmed };
   broadcast(room, peerId, payload);
+  logger.info(`[Chat] "${user.username}" in room "${user.roomKey}": ${trimmed}`);
 }
 
 function handleSignal(ws, peerId, { toPeerId, data }) {
