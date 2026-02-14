@@ -179,6 +179,9 @@ class SignalingClient extends EventEmitter {
 
   leaveRoom() { this.send({ type: 'leave-room' }); }
 
+  /** @param {string} text */
+  chat(text) { this.send({ type: 'chat', text }); }
+
   /**
    * Forwards a WebRTC signal payload to another peer via the server.
    * @param {string} toPeerId

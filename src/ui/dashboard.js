@@ -1,7 +1,11 @@
 'use strict';
 
 const blessed = require('blessed');
-const { generateWaveform, silentWaveform } = require('./waveform');
+// waveform.js is no longer used for the main display — compact mini waveform
+// is rendered inline in the status bar. Keeping the require commented out
+// in case it's needed for future features.
+// const { generateWaveform, silentWaveform, BAR_COUNT } = require('./waveform');
+const logger = require('../utils/logger');
 
 /**
  * @typedef {Object} Participant
@@ -12,20 +16,37 @@ const { generateWaveform, silentWaveform } = require('./waveform');
  * @property {boolean} isSelf
  */
 
+/** Compact waveform: 8 bars using block characters for the status bar. */
+const MINI_BARS = [' ', '\u2581', '\u2582', '\u2583', '\u2584', '\u2585', '\u2586', '\u2587', '\u2588'];
+const MINI_BAR_COUNT = 12;
+
+function miniWaveform(audioLevel) {
+  if (audioLevel <= 0) return '\u2581'.repeat(MINI_BAR_COUNT);
+  const bars = [];
+  for (let i = 0; i < MINI_BAR_COUNT; i++) {
+    // Create a natural-looking wave shape centered on the audio level
+    const dist = Math.abs(i - MINI_BAR_COUNT / 2) / (MINI_BAR_COUNT / 2);
+    const amplitude = audioLevel * (1 - dist * 0.6) * (0.7 + Math.random() * 0.3);
+    const clamped = Math.max(0, Math.min(1, amplitude));
+    bars.push(MINI_BARS[Math.round(clamped * (MINI_BARS.length - 1))]);
+  }
+  return bars.join('');
+}
+
 /**
  * Creates the in-call blessed dashboard.
  *
  * Layout:
  *   ┌─ VoiceSync | Room: XXX-XXX-XXX | You: alice ──────────────────┐
  *   │                                                                 │
- *   │  ┌─ Participants ──┐  ┌─ Audio ──────────────────────────────┐ │
- *   │  │  ● alice (you)  │  │  ▁▂▃▅▆▇█▇▆▅▃▂▁▁▂▃▅▆▇█▇▆▅▃▂▁       │ │
- *   │  │  ○ bob          │  │                                      │ │
- *   │  └─────────────────┘  └──────────────────────────────────────┘ │
+ *   │  ┌─ Participants ──┐  ┌─ Chat ─────────────────────────────┐   │
+ *   │  │  * alice (you)  │  │  bob: hey everyone!                │   │
+ *   │  │  o bob          │  │  alice: hello!                     │   │
+ *   │  └─────────────────┘  └────────────────────────────────────┘   │
  *   │                                                                 │
- *   │  ● MIC ON       Latency: 23ms ●     Quality: Excellent ●       │
+ *   │  * MIC ON  ▁▂▃▅▆▇▅▃▂▁  Latency: 23ms  Quality: Excellent     │
  *   │                                                                 │
- *   │  [M] Mute/Unmute    [Q] Leave Call    [?] Help                  │
+ *   │  [M] Mute   [C] Chat   [Q] Leave   [?] Help                    │
  *   └────────────────────────────────────────────────────────────────┘
  *
  * @param {Object} opts
@@ -35,11 +56,11 @@ const { generateWaveform, silentWaveform } = require('./waveform');
  */
 function createDashboard({ username, roomKey }) {
   // Clean up orphaned readline/inquirer listeners that cause double-typing
-  // in blessed inputs. Inquirer attaches 'data' and 'keypress' listeners to
-  // process.stdin that persist even after inquirer finishes, causing blessed
-  // to process every keypress twice.
   process.stdin.removeAllListeners('data');
   process.stdin.removeAllListeners('keypress');
+
+  // Suppress all logger output while the blessed UI is active
+  logger.suppress(true);
 
   const screen = blessed.screen({
     smartCSR: true,
@@ -55,8 +76,7 @@ function createDashboard({ username, roomKey }) {
   screen.program.disableMouse();
   screen._listenedMouse = true;
 
-  // Intercept raw terminal input to discard mouse escape sequences before
-  // blessed's key parser sees them
+  // Intercept raw terminal input to discard mouse escape sequences
   if (screen.program.input) {
     const origEmit = screen.program.input.emit.bind(screen.program.input);
 
@@ -105,7 +125,7 @@ function createDashboard({ username, roomKey }) {
   const participantBox = blessed.box({
     parent: screen,
     label: ' {bold}Participants{/bold} ',
-    top: 2, left: 1, width: '35%-1', bottom: 5,
+    top: 2, left: 1, width: '30%-1', bottom: 5,
     border: { type: 'line' },
     style: { border: { fg: 'blue' }, label: { fg: 'blue' } },
     scrollable: true,
@@ -114,18 +134,34 @@ function createDashboard({ username, roomKey }) {
     padding: { left: 1 },
   });
 
-  // ── Waveform box ──────────────────────────────────────────────────────────
-  const waveformBox = blessed.box({
+  // ── Chat box (replaces the old Audio waveform box) ─────────────────────────
+  const chatBox = blessed.box({
     parent: screen,
-    label: ' {bold}Audio{/bold} ',
-    top: 2, left: '35%', right: 1, bottom: 5,
+    label: ' {bold}Chat{/bold} ',
+    top: 2, left: '30%', right: 1, bottom: 5,
     border: { type: 'line' },
     style: { border: { fg: 'blue' }, label: { fg: 'blue' } },
+    scrollable: true,
+    alwaysScroll: true,
     tags: true,
     padding: { left: 1, right: 1 },
   });
 
-  // ── Status bar (mute + latency + quality) ──────────────────────────────────
+  // ── Chat input (hidden by default, shown when C is pressed) ────────────────
+  const chatInput = blessed.textbox({
+    parent: screen,
+    bottom: 5, left: '30%', right: 1, height: 3,
+    border: { type: 'line' },
+    style: { border: { fg: 'yellow' }, fg: 'white' },
+    label: ' {bold}Type message (Enter to send, Esc to cancel){/bold} ',
+    tags: true,
+    keys: false,
+    vi: false,
+    hidden: true,
+    inputOnFocus: false,
+  });
+
+  // ── Status bar (mute + waveform + latency + quality) ───────────────────────
   const statusInfoBar = blessed.box({
     parent: screen,
     bottom: 3, left: 1, right: 1, height: 1,
@@ -147,7 +183,7 @@ function createDashboard({ username, roomKey }) {
   blessed.box({
     parent: screen,
     bottom: 0, left: 0, right: 0, height: 2,
-    content: '  {bold}[M]{/bold} Mute/Unmute    {bold}[Q]{/bold} Leave Call    {bold}[?]{/bold} Help',
+    content: '  {bold}[M]{/bold} Mute    {bold}[C]{/bold} Chat    {bold}[Q]{/bold} Leave    {bold}[?]{/bold} Help',
     style: { fg: 'white', bg: '#333333' },
     tags: true,
   });
@@ -155,7 +191,6 @@ function createDashboard({ username, roomKey }) {
   // ── Internal state ────────────────────────────────────────────────────────
   /** @type {Participant[]} */
   let participants = [];
-  let currentWaveform = silentWaveform();
   let messageTimer = null;
   let _promptActive = false;
   let _lastWaveformRender = 0;
@@ -163,6 +198,9 @@ function createDashboard({ username, roomKey }) {
   let _latencyMs = -1;
   let _audioLevel = 0;
   const WAVEFORM_THROTTLE_MS = 80;
+
+  /** @type {Array<{from: string, text: string, self: boolean}>} */
+  const chatMessages = [];
 
   // ── Render helpers ────────────────────────────────────────────────────────
 
@@ -193,34 +231,20 @@ function createDashboard({ username, roomKey }) {
     participantBox.setContent('\n' + lines.join('\n'));
   }
 
-  function renderWaveform() {
-    const innerHeight = Math.max(1, (waveformBox.height || 6) - 2);
-
-    // Color the waveform based on mute state and audio level
-    let color = 'green';
-    if (_isMuted) color = 'red';
-    else if (_audioLevel > 0.3) color = 'cyan';
-    else if (_audioLevel > 0.1) color = 'green';
-    else color = 'gray';
-
-    const rows = [];
-    const topPad = Math.max(0, Math.floor((innerHeight - 3) / 2));
-    for (let i = 0; i < topPad; i++) rows.push('');
-
-    if (_isMuted) {
-      rows.push('');
-      rows.push(`  {red-fg}{bold}  MICROPHONE MUTED{/bold}{/red-fg}`);
-      rows.push('');
-      rows.push(`  {gray-fg}Press [M] to unmute{/gray-fg}`);
-    } else {
-      const waveStr = currentWaveform;
-      const row = `{${color}-fg}${waveStr}{/${color}-fg}`;
-      rows.push(row);
-      rows.push(row);
-      rows.push(row);
+  function renderChat() {
+    if (chatMessages.length === 0) {
+      chatBox.setContent('\n  {gray-fg}No messages yet. Press [C] to chat.{/gray-fg}');
+      return;
     }
 
-    waveformBox.setContent(rows.join('\n'));
+    const lines = chatMessages.map((m) => {
+      const nameColor = m.self ? 'cyan' : 'yellow';
+      return `{${nameColor}-fg}{bold}${m.from}{/bold}{/${nameColor}-fg}: ${m.text}`;
+    });
+    chatBox.setContent(lines.join('\n'));
+
+    // Auto-scroll to bottom
+    chatBox.setScrollPerc(100);
   }
 
   function renderStatusBar() {
@@ -229,43 +253,56 @@ function createDashboard({ username, roomKey }) {
       ? '{red-fg}{bold} x MIC OFF {/bold}{/red-fg}'
       : '{green-fg}{bold} * MIC ON  {/bold}{/green-fg}';
 
+    // Compact waveform indicator
+    let waveColor = 'gray';
+    let waveStr = miniWaveform(0);
+    if (_isMuted) {
+      waveColor = 'red';
+      waveStr = '\u2581'.repeat(MINI_BAR_COUNT);
+    } else if (_audioLevel > 0) {
+      waveColor = _audioLevel > 0.3 ? 'cyan' : _audioLevel > 0.1 ? 'green' : 'gray';
+      waveStr = miniWaveform(_audioLevel * 3);
+    }
+    const waveIndicator = `{${waveColor}-fg}${waveStr}{/${waveColor}-fg}`;
+
     // Latency indicator with color coding
     let latencyStr;
     if (_latencyMs < 0) {
       latencyStr = '{gray-fg}Latency: --{/gray-fg}';
     } else if (_latencyMs < 80) {
-      latencyStr = `{green-fg}Latency: ${_latencyMs}ms *{/green-fg}`;
+      latencyStr = `{green-fg}${_latencyMs}ms{/green-fg}`;
     } else if (_latencyMs < 200) {
-      latencyStr = `{yellow-fg}Latency: ${_latencyMs}ms *{/yellow-fg}`;
+      latencyStr = `{yellow-fg}${_latencyMs}ms{/yellow-fg}`;
     } else {
-      latencyStr = `{red-fg}Latency: ${_latencyMs}ms *{/red-fg}`;
+      latencyStr = `{red-fg}${_latencyMs}ms{/red-fg}`;
     }
 
     // Audio quality based on latency
     let qualityStr;
     if (_latencyMs < 0) {
-      qualityStr = '{gray-fg}Quality: --{/gray-fg}';
+      qualityStr = '{gray-fg}--{/gray-fg}';
     } else if (_latencyMs < 80) {
-      qualityStr = '{green-fg}Quality: Excellent *{/green-fg}';
+      qualityStr = '{green-fg}Excellent{/green-fg}';
     } else if (_latencyMs < 150) {
-      qualityStr = '{green-fg}Quality: Good *{/green-fg}';
+      qualityStr = '{green-fg}Good{/green-fg}';
     } else if (_latencyMs < 300) {
-      qualityStr = '{yellow-fg}Quality: Fair *{/yellow-fg}';
+      qualityStr = '{yellow-fg}Fair{/yellow-fg}';
     } else {
-      qualityStr = '{red-fg}Quality: Poor *{/red-fg}';
+      qualityStr = '{red-fg}Poor{/red-fg}';
     }
 
     const peerCount = participants.length;
-    const peersStr = `{cyan-fg}${peerCount} in call{/cyan-fg}`;
 
-    statusInfoBar.setContent(` ${muteIcon}     ${latencyStr}     ${qualityStr}     ${peersStr}`);
+    statusInfoBar.setContent(
+      ` ${muteIcon}  ${waveIndicator}  {gray-fg}|{/gray-fg}  Ping: ${latencyStr}  {gray-fg}|{/gray-fg}  Quality: ${qualityStr}  {gray-fg}|{/gray-fg}  {cyan-fg}${peerCount} in call{/cyan-fg}`
+    );
   }
 
   // ── Public API ─────────────────────────────────────────────────────────────
 
   function render() {
     renderParticipants();
-    renderWaveform();
+    renderChat();
     renderStatusBar();
     screen.render();
   }
@@ -284,13 +321,14 @@ function createDashboard({ username, roomKey }) {
     if (now - _lastWaveformRender < WAVEFORM_THROTTLE_MS) return;
     _lastWaveformRender = now;
 
-    // Calculate audio level for waveform coloring
+    // Calculate audio level for the compact waveform in status bar
     if (samples && samples.length > 0) {
       _audioLevel = Math.sqrt(samples.reduce((sum, x) => sum + x * x, 0) / samples.length);
+    } else {
+      _audioLevel = 0;
     }
 
-    currentWaveform = generateWaveform(samples);
-    renderWaveform();
+    renderStatusBar();
     screen.render();
   }
 
@@ -302,9 +340,39 @@ function createDashboard({ username, roomKey }) {
 
   function updateMuteState(muted) {
     _isMuted = muted;
-    renderWaveform();
     renderStatusBar();
     screen.render();
+  }
+
+  function addChatMessage(fromUsername, text, isSelf) {
+    chatMessages.push({ from: fromUsername, text, self: isSelf });
+    // Keep last 200 messages
+    if (chatMessages.length > 200) chatMessages.shift();
+    renderChat();
+    screen.render();
+  }
+
+  /**
+   * Opens the chat input box for typing a message.
+   * @param {(text: string|null) => void} callback
+   */
+  function openChatInput(callback) {
+    _promptActive = true;
+    chatInput.show();
+    chatInput.focus();
+    chatInput.setValue('');
+    screen.render();
+
+    chatInput.readInput((err, value) => {
+      _promptActive = false;
+      chatInput.hide();
+      screen.render();
+      if (err || !value || !value.trim()) {
+        callback(null);
+      } else {
+        callback(value.trim());
+      }
+    });
   }
 
   function showMessage(msg) {
@@ -329,6 +397,7 @@ function createDashboard({ username, roomKey }) {
 
   function destroy() {
     clearTimeout(messageTimer);
+    logger.suppress(false);
     screen.destroy();
   }
 
@@ -341,6 +410,8 @@ function createDashboard({ username, roomKey }) {
     updateWaveform,
     updateLatency,
     updateMuteState,
+    addChatMessage,
+    openChatInput,
     showMessage,
     setStatus,
     isPromptActive,

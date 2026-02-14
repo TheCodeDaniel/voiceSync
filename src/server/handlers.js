@@ -115,6 +115,18 @@ function handleDeclineInvite(ws, peerId, { roomKey }) {
   logger.info(`"${user.username}" declined invite to room "${roomKey}"`);
 }
 
+function handleChat(ws, peerId, { text }) {
+  const user = users.findById(peerId);
+  if (!user || !user.roomKey) return send(ws, { type: 'chat-error', message: 'Not in a room.' });
+  if (!text || typeof text !== 'string' || !text.trim()) return;
+
+  const room = rooms.getRoom(user.roomKey);
+  if (!room) return;
+
+  const payload = { type: 'chat', fromUsername: user.username, text: text.trim().slice(0, 500) };
+  broadcast(room, peerId, payload);
+}
+
 function handleSignal(ws, peerId, { toPeerId, data }) {
   const target = users.findById(toPeerId);
   if (target) send(target.socket, { type: 'signal', fromPeerId: peerId, data });
@@ -143,6 +155,7 @@ const MESSAGE_HANDLERS = {
   'invite':         handleInvite,
   'accept-invite':  handleAcceptInvite,
   'decline-invite': handleDeclineInvite,
+  'chat':           handleChat,
   'signal':         handleSignal,
   'leave-room':     handleLeaveRoom,
 };

@@ -32,6 +32,10 @@ async function runCallUI(session, roomKey, username) {
 
   session.on('latency', (ms) => dashboard.updateLatency(ms));
 
+  session.on('chat', ({ fromUsername, text }) => {
+    dashboard.addChatMessage(fromUsername, text, false);
+  });
+
   session.on('error', (err) => {
     logger.error(err.message);
 
@@ -57,6 +61,15 @@ async function runCallUI(session, roomKey, username) {
     dashboard.showMessage(nowMuted ? 'Microphone muted' : 'Microphone unmuted');
   });
 
+  screen.key(['c', 'C'], () => {
+    if (dashboard.isPromptActive()) return;
+    dashboard.openChatInput((text) => {
+      if (!text) return;
+      session.sendChat(text);
+      dashboard.addChatMessage(username, text, true);
+    });
+  });
+
   screen.key(['q', 'Q'], async () => {
     if (dashboard.isPromptActive()) return;
     dashboard.setStatus('Leaving call...');
@@ -74,7 +87,7 @@ async function runCallUI(session, roomKey, username) {
 
   screen.key(['?'], () => {
     if (dashboard.isPromptActive()) return;
-    dashboard.showMessage('[M] Mute/Unmute  [Q] Leave Call  [?] This help');
+    dashboard.showMessage('[M] Mute  [C] Chat  [Q] Leave  [?] This help');
   });
 
   // ── Wait for the call to end ───────────────────────────────────────────────

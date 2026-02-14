@@ -124,6 +124,10 @@ class Session extends EventEmitter {
       this.emit('invite-error', message);
     });
 
+    sig.on('chat', ({ fromUsername, text }) => {
+      this.emit('chat', { fromUsername, text });
+    });
+
     sig.on('left-room', () => {
       this._cleanupCall();
       this.emit('ended');
@@ -275,6 +279,15 @@ class Session extends EventEmitter {
 
   /** @returns {boolean} */
   get isMuted() { return this._audio.isMuted; }
+
+  /**
+   * Sends a chat message to all peers in the room.
+   * @param {string} text
+   */
+  sendChat(text) {
+    if (!text || !text.trim()) return;
+    this._signaling.chat(text.trim());
+  }
 
   /**
    * Leaves the current room and disconnects from the signaling server.
